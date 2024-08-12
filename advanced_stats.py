@@ -1,3 +1,4 @@
+import json
 import logging
 import os
 import time
@@ -13,6 +14,28 @@ from basic_distributions import (fit_beta_binom, fit_binom, fit_nb, fit_poi,
                                  fit_uniform, neg_log_likelihood_binom,
                                  neg_log_likelihood_nb)
 
+
+def make_serializable(obj):
+    """
+    Mainly used to output Bootstrap results to file.
+    Converts NumPy arrays to lists and NumPy numbers to native Python types for JSON serialization.
+
+    Parameters:
+    - obj: Object to convert to a list.
+
+    Returns:
+    - obj: Object with NumPy arrays converted to lists.
+    """
+    if isinstance(obj, np.ndarray):
+        return obj.tolist()
+    elif isinstance(obj, (np.int32, np.int64, np.float32, np.float64)):
+        return obj.item()
+    elif isinstance(obj, dict):
+        return {k: make_serializable(v) for k, v in obj.items()}
+    elif isinstance(obj, list):
+        return [make_serializable(i) for i in obj]
+    else:
+        return obj
 
 def calc_BIC(log_likelihood, k, n):
     """
@@ -89,11 +112,23 @@ def model_func(train_data, test_data, x):
     
     Returns:
     - weights: Weights of the component models within the BMA model.
+        - The weight given to each underlying model fitted.
     - average_pmf: PMF of the BMA model.
-    - log_likelihood_bma: Log-likelihood of the BMA model.
-    - num_params_bma: The number of parameters of the BMA model.
-    - bic_averaged_model: The Bayesian Information Criterion (BIC) of the averaged model.
+        - The Probability Mass Function for each discrete point on the x-axis, starting from 0.
+    - log_likelihood_bma: The overall log-likelihood of the resulting BMA model.
+    - num_params_bma: The number of parameters of the resulting BMA model.
+    - bic_averaged_model: The Bayesian Information Criterion (BIC) of the resulting BMA model.
     - params_used: The parameters used in each model.
+        Description of params_used in bootstrap results:
+        - Each bootstrap resample comes with the list of fitted parameters used in all of its cross-validation folds
+        - At the core, params_used is a list of nested lists containing the fitted parameters in an organized way
+        - Each top-line list in params_used corresponds to a cross-validation fold
+        - Each fold, in turn, contains a list of the fitted base models. At the time of this writing, there were 5 base models:
+            - Uniform: fitted parameter is n (maximal value)
+            - Poisson: fitted parameter is λ (mean)
+            - Binomial: fitted parameters are n (number of trials) and p (probability)
+            - Negative Binomial: fitted parameters are r (number of claims until stop) and p (probability of a claim)
+            - Beta-Binomial: fitted parameters are α (expected number of claims) and β (expected number of "non-claims")
     """
     # Fit the Uniform distribution to the training data
     _, n_fitted_uniform, _, uniform_pmf, neg_log_likelihood_uniform = fit_uniform(train_data)
@@ -171,7 +206,7 @@ def cross_validate(model_func, data, x, k=5, random_state=42):
         log_likelihood_bma_cv: Log-likelihood of the BMA model.
         param_num_bma_cv: The number of parameters of the BMA model
         bic_bma_cv: The Bayesian Information Criterion (BIC) of the averaged model.
-        model_uncertainty: The uncertainty of the individual model.
+        model_uncertainty: The uncertainty of the individual base models.
         params_used: The parameters used in each model.
     """
     kf = KFold(n_splits=k, shuffle=True, random_state=random_state)
@@ -224,7 +259,8 @@ def bootstrap_sample_evaluation(model_func, data, x, random_state, k_folds=5):
         log_likelihood_bma_cv: Log-likelihood of the BMA model.
         param_num_bma_cv: The number of parameters of the BMA model
         bic_bma_cv: The Bayesian Information Criterion (BIC) of the averaged model.
-        model_uncertainty: The uncertainty of the individual model.
+        model_uncertainty: The uncertainty of the individual base models.
+        params_used: The parameters used in each model.
     """
     # Generate a bootstrap sample
     try:
@@ -243,6 +279,7 @@ def bootstrap_sample_evaluation(model_func, data, x, random_state, k_folds=5):
         
         # Store the results
         result = {
+            'random_state': random_state,
             'weights_bma_cv': weights_bma_cv,
             'average_pmf_bma_cv': average_pmf_bma_cv,
             'log_likelihood_bma_cv': log_likelihood_bma_cv,
@@ -257,7 +294,7 @@ def bootstrap_sample_evaluation(model_func, data, x, random_state, k_folds=5):
         logging.info(f"Error in bootstrap_sample_evaluation: {e}")
         return None
 
-def bootstrap_uncertainty(model_func, data, x, n_bootstraps=1000, k_folds=5, max_workers=None, timeout=None):
+def bootstrap_uncertainty(model_func, data, x, n_bootstraps=1000, k_folds=5, max_workers=None, timeout=None, outfile=None):
     """
     Perform bootstrapping to evaluate parameter uncertainty.
     
@@ -272,12 +309,25 @@ def bootstrap_uncertainty(model_func, data, x, n_bootstraps=1000, k_folds=5, max
     
     Returns:
     - bootstrap_results: List of results dictionaries from each bootstrap sample.
-        weights_bma_cv: Weights of the component models within the BMA model.
-        average_pmf_bma_cv: PMF of the BMA model.
-        log_likelihood_bma_cv: Log-likelihood of the BMA model.
-        param_num_bma_cv: The number of parameters of the BMA model
+        weights_bma_cv: Weights of the component (Cross-Validation) models within the Bagged model.
+        average_pmf_bma_cv: Probability Mass Function (PMF) of the Bagged model.
+            - The mass values for each discrete point on the x-axis, starting from 0.
+        log_likelihood_bma_cv: Log-likelihood of the Bagged model.
+        param_num_bma_cv: The number of parameters of the Bagged model
         bic_bma_cv: The Bayesian Information Criterion (BIC) of the averaged model.
         model_uncertainty: The uncertainty of the individual model.
+            - The weights given to each base model within each Cross-Validation fold model.
+        params_used: The parameters used in each model.
+            Description of params_used in bootstrap results:
+            - Each bootstrap resample comes with the list of fitted parameters used in all of its cross-validation folds
+            - At the core, params_used is a list of nested lists containing the fitted parameters in an organized way
+            - Each top-line list in params_used corresponds to a cross-validation fold
+            - Each fold, in turn, contains a list of the fitted base models. At the time of this writing, there were 5 base models:
+                - Uniform: fitted parameter is n (maximal value)
+                - Poisson: fitted parameter is λ (mean)
+                - Binomial: fitted parameters are n (number of trials) and p (probability)
+                - Negative Binomial: fitted parameters are r (number of claims until stop) and p (probability of a claim)
+                - Beta-Binomial: fitted parameters are α (expected number of claims) and β (expected number of "non-claims")
     """
     logging.info(f"Starting bootstrapping with {n_bootstraps} samples for {k_folds} cv folds on {max_workers} workers.")
     bootstrap_results = []
@@ -298,6 +348,9 @@ def bootstrap_uncertainty(model_func, data, x, n_bootstraps=1000, k_folds=5, max
                 logging.info(f"Completed Bootstrap Sample {i+1} weights: {result['weights_bma_cv']}")
                 if result is not None:
                     bootstrap_results.append(result)
+                    if outfile is not None:
+                        with open(outfile, 'a') as file:
+                            file.write(json.dumps(make_serializable(result), indent=2) + ',\n')
             except Exception as e:
                 logging.info(f"Error in future {i}: {e}")
             

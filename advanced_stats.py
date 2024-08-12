@@ -88,7 +88,12 @@ def model_func(train_data, test_data, x):
     - x: Values for the PMF.
     
     Returns:
-    - performance: Performance metric (e.g., accuracy, log-likelihood).
+    - weights: Weights of the component models within the BMA model.
+    - average_pmf: PMF of the BMA model.
+    - log_likelihood_bma: Log-likelihood of the BMA model.
+    - num_params_bma: The number of parameters of the BMA model.
+    - bic_averaged_model: The Bayesian Information Criterion (BIC) of the averaged model.
+    - params_used: The parameters used in each model.
     """
     # Fit the Uniform distribution to the training data
     _, n_fitted_uniform, _, uniform_pmf, neg_log_likelihood_uniform = fit_uniform(train_data)
@@ -132,6 +137,12 @@ def model_func(train_data, test_data, x):
                     binom.pmf(x, n_fitted_binom, p_fitted_binom),
                     nbinom.pmf(x, r_nb_fitted, p_nb_fitted),
                     beta_binomial_pmf(x, max(train_data), alpha_bb_fitted, beta_bb_fitted)]
+    
+    params_used = [[n_fitted_uniform],
+                   [λ],
+                   [n_fitted_binom, p_fitted_binom],
+                   [r_nb_fitted, p_nb_fitted],
+                   [alpha_bb_fitted, beta_bb_fitted]]
 
     # Perform Bayesian Model Averaging
     weights, average_pmf, log_likelihood_bma, num_params_bma, bic_averaged_model = bma_using_bic(model_names,
@@ -141,7 +152,7 @@ def model_func(train_data, test_data, x):
                                                                                                     train_data,
                                                                                                     test_data)
 
-    return weights, average_pmf, log_likelihood_bma, num_params_bma, bic_averaged_model
+    return weights, average_pmf, log_likelihood_bma, num_params_bma, bic_averaged_model, params_used
 
 
 def cross_validate(model_func, data, x, k=5, random_state=42):
@@ -161,6 +172,7 @@ def cross_validate(model_func, data, x, k=5, random_state=42):
         param_num_bma_cv: The number of parameters of the BMA model
         bic_bma_cv: The Bayesian Information Criterion (BIC) of the averaged model.
         model_uncertainty: The uncertainty of the individual model.
+        params_used: The parameters used in each model.
     """
     kf = KFold(n_splits=k, shuffle=True, random_state=random_state)
     model_names = []
@@ -169,12 +181,13 @@ def cross_validate(model_func, data, x, k=5, random_state=42):
     pmf_values = []
 
     model_uncertainty = [] # Track uncertainty of the individual models
+    params_used_list = [] # Track the parameters used in each model
 
     for fold_number, (train_index, test_index) in enumerate(kf.split(data), 1):
         logging.info(f"## Evaluating Fold ~{fold_number}~ ##")
         train_data = [data[i] for i in train_index]
         test_data = [data[i] for i in test_index]
-        weights, average_pmf, log_likelihood_bma, params_averaged_model, bic_averaged_model = model_func(train_data, test_data, x)
+        weights, average_pmf, log_likelihood_bma, params_averaged_model, bic_averaged_model, params_used = model_func(train_data, test_data, x)
 
         # Store the results of BMA for each fold
         model_names.append(f"BMA Model from Fold {fold_number}")
@@ -182,6 +195,7 @@ def cross_validate(model_func, data, x, k=5, random_state=42):
         bic_values.append(bic_averaged_model)
         pmf_values.append(average_pmf)
         model_uncertainty.append(weights)
+        params_used_list.append(params_used)
 
     # Perform BMA of the fold models
     weights_bma_cv, average_pmf_bma_cv, log_likelihood_bma_cv, param_num_bma_cv, bic_bma_cv = bma_using_bic(model_names,
@@ -190,7 +204,7 @@ def cross_validate(model_func, data, x, k=5, random_state=42):
                                                                                                             pmf_values,
                                                                                                             train_data,
                                                                                                             test_data)
-    return weights_bma_cv, average_pmf_bma_cv, log_likelihood_bma_cv, param_num_bma_cv, bic_bma_cv, model_uncertainty
+    return weights_bma_cv, average_pmf_bma_cv, log_likelihood_bma_cv, param_num_bma_cv, bic_bma_cv, model_uncertainty, params_used_list
 
 def bootstrap_sample_evaluation(model_func, data, x, random_state, k_folds=5):
     """
@@ -225,7 +239,7 @@ def bootstrap_sample_evaluation(model_func, data, x, random_state, k_folds=5):
         
         # Perform cross-validation on the bootstrap sample
         k_fold_random_state = random_state*k_folds+len(bootstrap_sample) # Use a different random state for each fold
-        weights_bma_cv, average_pmf_bma_cv, log_likelihood_bma_cv, param_num_bma_cv, bic_bma_cv, model_uncertainty = cross_validate(model_func, bootstrap_sample, x, k=k_folds, random_state=k_fold_random_state)
+        weights_bma_cv, average_pmf_bma_cv, log_likelihood_bma_cv, param_num_bma_cv, bic_bma_cv, model_uncertainty, params_used = cross_validate(model_func, bootstrap_sample, x, k=k_folds, random_state=k_fold_random_state)
         
         # Store the results
         result = {
@@ -234,7 +248,8 @@ def bootstrap_sample_evaluation(model_func, data, x, random_state, k_folds=5):
             'log_likelihood_bma_cv': log_likelihood_bma_cv,
             'param_num_bma_cv': param_num_bma_cv,
             'bic_bma_cv': bic_bma_cv,
-            'model_uncertainty': model_uncertainty
+            'model_uncertainty': model_uncertainty,
+            'params_used': params_used
         }
         
         return result

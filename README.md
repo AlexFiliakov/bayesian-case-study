@@ -16,4 +16,4 @@ Cross-Validated BMA with 12 folds provides a minor improvement:
 
 We can visualize the model uncertainty estimated by cross-validation:
 
-![Model Uncertainty](output/box%20plot%20of%20model%20weights%20in%20bma.png)
+![Model Uncertainty](output/box%20plot%20of%20model%20weights%20of%20components%20in%20bma.png)

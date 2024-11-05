@@ -103,7 +103,7 @@ def bma_using_bic(model_names, param_counts, bic_values, pmf_values, train_data,
 
 def model_func(train_data, test_data, x):
     """
-    Example model function. Replace with actual model training and evaluation.
+    Perform the model training.
     
     Parameters:
     - train_data: Training data.
